@@ -24,7 +24,7 @@ import org.apache.lucene.util.packed.PackedInts;
 
 /**
  * Utility class to encode sequences of 128 small positive integers, with same API as PForUtil but
- * with no exception patching. (PForUtil with exception related items commented out.)
+ * with no exception patching. (PForUtil with exception related items removed.)
  */
 final class ForUtilNoP {
 
@@ -60,11 +60,6 @@ final class ForUtilNoP {
 
   /** Encode 128 integers from {@code longs} into {@code out}. */
   void encode(long[] longs, DataOutput out) throws IOException {
-    // Determine the top MAX_EXCEPTIONS + 1 values
-    //    final LongHeap top = new LongHeap(MAX_EXCEPTIONS + 1);
-    //    for (int i = 0; i <= MAX_EXCEPTIONS; ++i) {
-    //      top.push(longs[i]);
-    //    }
     long topValue = longs[0];
     for (int i = 1; i < ForUtil.BLOCK_SIZE; ++i) {
       if (longs[i] > topValue) {
@@ -72,45 +67,17 @@ final class ForUtilNoP {
       }
     }
 
-    //    long max = 0L;
-    //    for (int i = 1; i <= top.size(); ++i) {
-    //      max = Math.max(max, top.get(i));
-    //    }
-
     final int maxBitsRequired = PackedInts.bitsRequired(topValue);
     // We store the patch on a byte, so we can't decrease the number of bits required by more than 8
     final int patchedBitsRequired =
         Math.max(PackedInts.bitsRequired(topValue), maxBitsRequired - 8);
     int numExceptions = 0;
-    //    final long maxUnpatchedValue = (1L << patchedBitsRequired) - 1;
-    //    for (int i = 2; i <= top.size(); ++i) {
-    //      if (top.get(i) > maxUnpatchedValue) {
-    //        numExceptions++;
-    //      }
-    //    }
     final byte[] exceptions = new byte[numExceptions * 2];
-    //    if (numExceptions > 0) {
-    //      int exceptionCount = 0;
-    //      for (int i = 0; i < ForUtil.BLOCK_SIZE; ++i) {
-    //        if (longs[i] > maxUnpatchedValue) {
-    //          exceptions[exceptionCount * 2] = (byte) i;
-    //          exceptions[exceptionCount * 2 + 1] = (byte) (longs[i] >>> patchedBitsRequired);
-    //          longs[i] &= maxUnpatchedValue;
-    //          exceptionCount++;
-    //        }
-    //      }
-    //      assert exceptionCount == numExceptions : exceptionCount + " " + numExceptions;
-    //    }
 
     if (allEqual(longs) && maxBitsRequired <= 8) {
-      //      for (int i = 0; i < numExceptions; ++i) {
-      //        exceptions[2 * i + 1] =
-      //                (byte) (Byte.toUnsignedLong(exceptions[2 * i + 1]) << patchedBitsRequired);
-      //      }
       out.writeByte((byte) (numExceptions << 5));
       out.writeVLong(longs[0]);
     } else {
-      //      (numExceptions << 5) |
       final int token = patchedBitsRequired;
       out.writeByte((byte) token);
       forUtil.encode(longs, patchedBitsRequired, out);
@@ -128,17 +95,12 @@ final class ForUtilNoP {
     } else {
       forUtil.decode(bitsPerValue, in, longs);
     }
-    //    for (int i = 0; i < numExceptions; ++i) {
-    //      longs[Byte.toUnsignedInt(in.readByte())] |=
-    //          Byte.toUnsignedLong(in.readByte()) << bitsPerValue;
-    //    }
   }
 
   /** Decode deltas, compute the prefix sum and add {@code base} to all decoded longs. */
   void decodeAndPrefixSum(DataInput in, long base, long[] longs) throws IOException {
     final int token = Byte.toUnsignedInt(in.readByte());
     final int bitsPerValue = token & 0x1f;
-    //    final int numExceptions = token >>> 5;
     // when there are no exceptions to apply, we can be a bit more efficient with our decoding
     if (bitsPerValue == 0) {
       // a bpv of zero indicates all delta values are the same
@@ -155,7 +117,7 @@ final class ForUtilNoP {
       forUtil.decodeTo32(bitsPerValue, in, longs);
       prefixSum32(longs, base);
     }
-
+    // Left this unused logic in, but this is how to decode with exceptions.
     // pack two values per long so we can apply prefixes two-at-a-time
 //    if (bitsPerValue == 0) {
 //      fillSameValue32(longs, in.readVLong());
@@ -210,22 +172,6 @@ final class ForUtilNoP {
     final long token = val << 32 | val;
     Arrays.fill(longs, 0, HALF_BLOCK_SIZE, token);
   }
-
-  /** Apply the exceptions where the values are packed two-per-long in {@code longs}. */
-//  private void applyExceptions32(int bitsPerValue, int numExceptions, DataInput in, long[] longs)
-//      throws IOException {
-//    in.readBytes(exceptionBuff, 0, numExceptions * 2);
-//    for (int i = 0; i < numExceptions; ++i) {
-//      final int exceptionPos = Byte.toUnsignedInt(exceptionBuff[i * 2]);
-//      final long exception = Byte.toUnsignedLong(exceptionBuff[i * 2 + 1]);
-//      // note that we pack two values per long, so the index is [0..63] for 128 values
-//      final int idx = exceptionPos & 0x3f; // mod 64
-//      // we need to shift by 1) the bpv, and 2) 32 for positions [0..63] (and no 32 shift for
-//      // [64..127])
-//      final int shift = bitsPerValue + ((1 ^ (exceptionPos >>> 6)) << 5);
-//      longs[idx] |= exception << shift;
-//    }
-//  }
 
   /** Apply prefix sum logic where the values are packed two-per-long in {@code longs}. */
   private static void prefixSum32(long[] longs, long base) {
