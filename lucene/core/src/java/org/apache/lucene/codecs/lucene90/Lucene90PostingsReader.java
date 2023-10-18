@@ -306,7 +306,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
   final class BlockDocsEnum extends PostingsEnum {
 
-    final PForUtil pforUtil = new PForUtil(new ForUtil());
+    final ForUtilNoP forUtilNoP = new ForUtilNoP(new ForUtil());
 
     private final long[] docBuffer = new long[BLOCK_SIZE + 1];
     private final long[] freqBuffer = new long[BLOCK_SIZE];
@@ -409,7 +409,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
     @Override
     public int freq() throws IOException {
       if (isFreqsRead == false) {
-        pforUtil.decode(docIn, freqBuffer); // read freqBuffer for this block
+        forUtilNoP.decode(docIn, freqBuffer); // read freqBuffer for this block
         isFreqsRead = true;
       }
       return (int) freqBuffer[docBufferUpto - 1];
@@ -444,7 +444,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       // Check if we skipped reading the previous block of freqBuffer, and if yes, position docIn
       // after it
       if (isFreqsRead == false) {
-        pforUtil.skip(docIn);
+        forUtilNoP.skip(docIn);
         isFreqsRead = true;
       }
 
@@ -452,13 +452,13 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       assert left >= 0;
 
       if (left >= BLOCK_SIZE) {
-        pforUtil.decodeAndPrefixSum(docIn, accum, docBuffer);
+        forUtilNoP.decodeAndPrefixSum(docIn, accum, docBuffer);
 
         if (indexHasFreq) {
           if (needsFreq) {
             isFreqsRead = false;
           } else {
-            pforUtil.skip(docIn); // skip over freqBuffer if we don't need them at all
+            forUtilNoP.skip(docIn); // skip over freqBuffer if we don't need them at all
           }
         }
         blockUpto += BLOCK_SIZE;
@@ -563,7 +563,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
   // Also handles payloads + offsets
   final class EverythingEnum extends PostingsEnum {
 
-    final PForUtil pforUtil = new PForUtil(new ForUtil());
+    final ForUtilNoP forUtilNoP = new ForUtilNoP(new ForUtil());
 
     private final long[] docBuffer = new long[BLOCK_SIZE + 1];
     private final long[] freqBuffer = new long[BLOCK_SIZE + 1];
@@ -751,8 +751,8 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       assert left >= 0;
 
       if (left >= BLOCK_SIZE) {
-        pforUtil.decodeAndPrefixSum(docIn, accum, docBuffer);
-        pforUtil.decode(docIn, freqBuffer);
+        forUtilNoP.decodeAndPrefixSum(docIn, accum, docBuffer);
+        forUtilNoP.decode(docIn, freqBuffer);
         blockUpto += BLOCK_SIZE;
       } else if (docFreq == 1) {
         docBuffer[0] = singletonDocID;
@@ -806,11 +806,11 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
         }
         payloadByteUpto = 0;
       } else {
-        pforUtil.decode(posIn, posDeltaBuffer);
+        forUtilNoP.decode(posIn, posDeltaBuffer);
 
         if (indexHasPayloads) {
           if (needsPayloads) {
-            pforUtil.decode(payIn, payloadLengthBuffer);
+            forUtilNoP.decode(payIn, payloadLengthBuffer);
             int numBytes = payIn.readVInt();
 
             if (numBytes > payloadBytes.length) {
@@ -820,7 +820,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           } else {
             // this works, because when writing a vint block we always force the first length to be
             // written
-            pforUtil.skip(payIn); // skip over lengths
+            forUtilNoP.skip(payIn); // skip over lengths
             int numBytes = payIn.readVInt(); // read length of payloadBytes
             payIn.seek(payIn.getFilePointer() + numBytes); // skip over payloadBytes
           }
@@ -829,13 +829,13 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
         if (indexHasOffsets) {
           if (needsOffsets) {
-            pforUtil.decode(payIn, offsetStartDeltaBuffer);
-            pforUtil.decode(payIn, offsetLengthBuffer);
+            forUtilNoP.decode(payIn, offsetStartDeltaBuffer);
+            forUtilNoP.decode(payIn, offsetLengthBuffer);
           } else {
             // this works, because when writing a vint block we always force the first length to be
             // written
-            pforUtil.skip(payIn); // skip over starts
-            pforUtil.skip(payIn); // skip over lengths
+            forUtilNoP.skip(payIn); // skip over starts
+            forUtilNoP.skip(payIn); // skip over lengths
           }
         }
       }
@@ -941,11 +941,11 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
         toSkip -= leftInBlock;
         while (toSkip >= BLOCK_SIZE) {
           assert posIn.getFilePointer() != lastPosBlockFP;
-          pforUtil.skip(posIn);
+          forUtilNoP.skip(posIn);
 
           if (indexHasPayloads) {
             // Skip payloadLength block:
-            pforUtil.skip(payIn);
+            forUtilNoP.skip(payIn);
 
             // Skip payloadBytes block:
             int numBytes = payIn.readVInt();
@@ -953,8 +953,8 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           }
 
           if (indexHasOffsets) {
-            pforUtil.skip(payIn);
-            pforUtil.skip(payIn);
+            forUtilNoP.skip(payIn);
+            forUtilNoP.skip(payIn);
           }
           toSkip -= BLOCK_SIZE;
         }
@@ -1047,7 +1047,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
   final class BlockImpactsDocsEnum extends ImpactsEnum {
 
-    final PForUtil pforUtil = new PForUtil(new ForUtil());
+    final ForUtilNoP forUtilNoP = new ForUtilNoP(new ForUtil());
 
     private final long[] docBuffer = new long[BLOCK_SIZE + 1];
     private final long[] freqBuffer = new long[BLOCK_SIZE];
@@ -1118,7 +1118,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
     @Override
     public int freq() throws IOException {
       if (isFreqsRead == false) {
-        pforUtil.decode(docIn, freqBuffer); // read freqBuffer for this block
+        forUtilNoP.decode(docIn, freqBuffer); // read freqBuffer for this block
         isFreqsRead = true;
       }
       return (int) freqBuffer[docBufferUpto - 1];
@@ -1133,7 +1133,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       // Check if we skipped reading the previous block of freqBuffer, and if yes, position docIn
       // after it
       if (isFreqsRead == false) {
-        pforUtil.skip(docIn);
+        forUtilNoP.skip(docIn);
         isFreqsRead = true;
       }
 
@@ -1141,9 +1141,9 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       assert left >= 0;
 
       if (left >= BLOCK_SIZE) {
-        pforUtil.decodeAndPrefixSum(docIn, accum, docBuffer);
+        forUtilNoP.decodeAndPrefixSum(docIn, accum, docBuffer);
         if (indexHasFreqs) {
-          pforUtil.decode(docIn, freqBuffer);
+          forUtilNoP.decode(docIn, freqBuffer);
         }
         blockUpto += BLOCK_SIZE;
       } else {
@@ -1240,7 +1240,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
   final class BlockImpactsPostingsEnum extends ImpactsEnum {
 
-    final PForUtil pforUtil = new PForUtil(new ForUtil());
+    final ForUtilNoP forUtilNoP = new ForUtilNoP(new ForUtil());
 
     private final long[] docBuffer = new long[BLOCK_SIZE];
     private final long[] freqBuffer = new long[BLOCK_SIZE];
@@ -1352,8 +1352,8 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       assert left >= 0;
 
       if (left >= BLOCK_SIZE) {
-        pforUtil.decodeAndPrefixSum(docIn, accum, docBuffer);
-        pforUtil.decode(docIn, freqBuffer);
+        forUtilNoP.decodeAndPrefixSum(docIn, accum, docBuffer);
+        forUtilNoP.decode(docIn, freqBuffer);
       } else {
         readVIntBlock(docIn, docBuffer, freqBuffer, left, true);
         prefixSum(docBuffer, left, accum);
@@ -1388,7 +1388,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           }
         }
       } else {
-        pforUtil.decode(posIn, posDeltaBuffer);
+        forUtilNoP.decode(posIn, posDeltaBuffer);
       }
     }
 
@@ -1472,7 +1472,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
         toSkip -= leftInBlock;
         while (toSkip >= BLOCK_SIZE) {
           assert posIn.getFilePointer() != lastPosBlockFP;
-          pforUtil.skip(posIn);
+          forUtilNoP.skip(posIn);
           toSkip -= BLOCK_SIZE;
         }
         refillPositions();
@@ -1532,7 +1532,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
   final class BlockImpactsEverythingEnum extends ImpactsEnum {
 
-    final PForUtil pforUtil = new PForUtil(new ForUtil());
+    final ForUtilNoP forUtilNoP = new ForUtilNoP(new ForUtil());
 
     private final long[] docBuffer = new long[BLOCK_SIZE];
     private final long[] freqBuffer = new long[BLOCK_SIZE];
@@ -1705,7 +1705,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
     @Override
     public int freq() throws IOException {
       if (indexHasFreq && (isFreqsRead == false)) {
-        pforUtil.decode(docIn, freqBuffer); // read freqBuffer for this block
+        forUtilNoP.decode(docIn, freqBuffer); // read freqBuffer for this block
         isFreqsRead = true;
       }
       return (int) freqBuffer[docBufferUpto - 1];
@@ -1722,9 +1722,9 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           // check if we need to load the previous freq block to catch up on positions or we can
           // skip it
           if (indexHasPos && needsPositions && (posDocUpTo < docUpto)) {
-            pforUtil.decode(docIn, freqBuffer); // load the previous freq block
+            forUtilNoP.decode(docIn, freqBuffer); // load the previous freq block
           } else {
-            pforUtil.skip(docIn); // skip it
+            forUtilNoP.skip(docIn); // skip it
           }
           isFreqsRead = true;
         }
@@ -1741,7 +1741,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       assert left >= 0;
 
       if (left >= BLOCK_SIZE) {
-        pforUtil.decodeAndPrefixSum(docIn, accum, docBuffer);
+        forUtilNoP.decodeAndPrefixSum(docIn, accum, docBuffer);
         if (indexHasFreq) {
           isFreqsRead =
               false; // freq block will be loaded lazily when necessary, we don't load it here
@@ -1791,11 +1791,11 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
         }
         payloadByteUpto = 0;
       } else {
-        pforUtil.decode(posIn, posDeltaBuffer);
+        forUtilNoP.decode(posIn, posDeltaBuffer);
 
         if (indexHasPayloads && payIn != null) {
           if (needsPayloads) {
-            pforUtil.decode(payIn, payloadLengthBuffer);
+            forUtilNoP.decode(payIn, payloadLengthBuffer);
             int numBytes = payIn.readVInt();
 
             if (numBytes > payloadBytes.length) {
@@ -1805,7 +1805,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           } else {
             // this works, because when writing a vint block we always force the first length to be
             // written
-            pforUtil.skip(payIn); // skip over lengths
+            forUtilNoP.skip(payIn); // skip over lengths
             int numBytes = payIn.readVInt(); // read length of payloadBytes
             payIn.seek(payIn.getFilePointer() + numBytes); // skip over payloadBytes
           }
@@ -1814,13 +1814,13 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
 
         if (indexHasOffsets && payIn != null) {
           if (needsOffsets) {
-            pforUtil.decode(payIn, offsetStartDeltaBuffer);
-            pforUtil.decode(payIn, offsetLengthBuffer);
+            forUtilNoP.decode(payIn, offsetStartDeltaBuffer);
+            forUtilNoP.decode(payIn, offsetLengthBuffer);
           } else {
             // this works, because when writing a vint block we always force the first length to be
             // written
-            pforUtil.skip(payIn); // skip over starts
-            pforUtil.skip(payIn); // skip over lengths
+            forUtilNoP.skip(payIn); // skip over starts
+            forUtilNoP.skip(payIn); // skip over lengths
           }
         }
       }
@@ -1926,11 +1926,11 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
         toSkip -= leftInBlock;
         while (toSkip >= BLOCK_SIZE) {
           assert posIn.getFilePointer() != lastPosBlockFP;
-          pforUtil.skip(posIn);
+          forUtilNoP.skip(posIn);
 
           if (indexHasPayloads && payIn != null) {
             // Skip payloadLength block:
-            pforUtil.skip(payIn);
+            forUtilNoP.skip(payIn);
 
             // Skip payloadBytes block:
             int numBytes = payIn.readVInt();
@@ -1938,8 +1938,8 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
           }
 
           if (indexHasOffsets && payIn != null) {
-            pforUtil.skip(payIn);
-            pforUtil.skip(payIn);
+            forUtilNoP.skip(payIn);
+            forUtilNoP.skip(payIn);
           }
           toSkip -= BLOCK_SIZE;
         }
@@ -1965,7 +1965,7 @@ public final class Lucene90PostingsReader extends PostingsReaderBase {
       }
 
       if (isFreqsRead == false) {
-        pforUtil.decode(docIn, freqBuffer); // read freqBuffer for this docs block
+        forUtilNoP.decode(docIn, freqBuffer); // read freqBuffer for this docs block
         isFreqsRead = true;
       }
       while (posDocUpTo < docUpto) { // bring posPendingCount upto the current doc

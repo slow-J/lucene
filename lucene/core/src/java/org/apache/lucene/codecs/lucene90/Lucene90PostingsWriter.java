@@ -89,7 +89,8 @@ public final class Lucene90PostingsWriter extends PushPostingsWriterBase {
   private int lastStartOffset;
   private int docCount;
 
-  private final PForUtil pforUtil;
+  private final ForUtilNoP forUtilNoP;
+
   private final Lucene90SkipWriter skipWriter;
 
   private boolean fieldHasNorms;
@@ -110,7 +111,8 @@ public final class Lucene90PostingsWriter extends PushPostingsWriterBase {
     try {
       CodecUtil.writeIndexHeader(
           docOut, DOC_CODEC, VERSION_CURRENT, state.segmentInfo.getId(), state.segmentSuffix);
-      pforUtil = new PForUtil(new ForUtil());
+
+      forUtilNoP = new ForUtilNoP(new ForUtil());
       if (state.fieldInfos.hasProx()) {
         posDeltaBuffer = new long[BLOCK_SIZE];
         String posFileName =
@@ -240,9 +242,9 @@ public final class Lucene90PostingsWriter extends PushPostingsWriterBase {
     docCount++;
 
     if (docBufferUpto == BLOCK_SIZE) {
-      pforUtil.encode(docDeltaBuffer, docOut);
+      forUtilNoP.encode(docDeltaBuffer, docOut);
       if (writeFreqs) {
-        pforUtil.encode(freqBuffer, docOut);
+        forUtilNoP.encode(freqBuffer, docOut);
       }
       // NOTE: don't set docBufferUpto back to 0 here;
       // finishDoc will do so (because it needs to see that
@@ -314,17 +316,17 @@ public final class Lucene90PostingsWriter extends PushPostingsWriterBase {
     posBufferUpto++;
     lastPosition = position;
     if (posBufferUpto == BLOCK_SIZE) {
-      pforUtil.encode(posDeltaBuffer, posOut);
+      forUtilNoP.encode(posDeltaBuffer, posOut);
 
       if (writePayloads) {
-        pforUtil.encode(payloadLengthBuffer, payOut);
+        forUtilNoP.encode(payloadLengthBuffer, payOut);
         payOut.writeVInt(payloadByteUpto);
         payOut.writeBytes(payloadBytes, 0, payloadByteUpto);
         payloadByteUpto = 0;
       }
       if (writeOffsets) {
-        pforUtil.encode(offsetStartDeltaBuffer, payOut);
-        pforUtil.encode(offsetLengthBuffer, payOut);
+        forUtilNoP.encode(offsetStartDeltaBuffer, payOut);
+        forUtilNoP.encode(offsetLengthBuffer, payOut);
       }
       posBufferUpto = 0;
     }
