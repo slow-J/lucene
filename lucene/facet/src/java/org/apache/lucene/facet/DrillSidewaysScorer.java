@@ -115,19 +115,19 @@ class DrillSidewaysScorer extends BulkScorer {
     }
 
     // some scorers, eg ReqExlScorer, can hit NPE if cost is called after nextDoc
-    long baseQueryCost = baseIterator.cost();
+    //    long baseQueryCost = baseIterator.cost();
 
-    final int numDims = dims.length;
+    //    final int numDims = dims.length;
 
-    long drillDownCost = 0;
-    for (int dim = 0; dim < numDims; dim++) {
-      drillDownCost += dims[dim].approximation.cost();
-    }
+    //    long drillDownCost = 0;
+    //    for (int dim = 0; dim < numDims; dim++) {
+    //      drillDownCost += dims[dim].approximation.cost();
+    //    }
 
-    long drillDownAdvancedCost = 0;
-    if (numDims > 1) {
-      drillDownAdvancedCost = dims[1].approximation.cost();
-    }
+    //    long drillDownAdvancedCost = 0;
+    //    if (numDims > 1) {
+    //      drillDownAdvancedCost = dims[1].approximation.cost();
+    //    }
 
     // Position dims scorers to their first matching doc:
     for (DocsAndCost dim : dims) {
@@ -145,24 +145,26 @@ class DrillSidewaysScorer extends BulkScorer {
     */
 
     try {
-      if (scoreSubDocsAtOnce || baseQueryCost < drillDownCost / 10) {
-        // System.out.println("queryFirst: baseScorer=" + baseScorer + " disis.length=" +
-        // disis.length
-        // + " bits.length=" + bits.length);
-        // position base scorer to the first matching doc
-        baseApproximation.nextDoc();
-        doQueryFirstScoring(acceptDocs, collector, dims);
-      } else if (numDims > 1 && drillDownAdvancedCost < baseQueryCost / 10) {
-        // System.out.println("drillDownAdvance");
-        // position base scorer to the first matching doc
-        baseIterator.nextDoc();
-        doDrillDownAdvanceScoring(acceptDocs, collector, dims);
-      } else {
-        // System.out.println("union");
-        // position base scorer to the first matching doc
-        baseIterator.nextDoc();
-        doUnionScoring(acceptDocs, collector, dims);
-      }
+      baseApproximation.nextDoc();
+      doQueryFirstScoring(acceptDocs, collector, dims);
+      //      if (scoreSubDocsAtOnce || baseQueryCost < drillDownCost / 10) {
+      //        // System.out.println("queryFirst: baseScorer=" + baseScorer + " disis.length=" +
+      //        // disis.length
+      //        // + " bits.length=" + bits.length);
+      //        // position base scorer to the first matching doc
+      //        baseApproximation.nextDoc();
+      //        doQueryFirstScoring(acceptDocs, collector, dims);
+      //      } else if (numDims > 1 && drillDownAdvancedCost < baseQueryCost / 10) {
+      //        // System.out.println("drillDownAdvance");
+      //        // position base scorer to the first matching doc
+      //        baseIterator.nextDoc();
+      //        doDrillDownAdvanceScoring(acceptDocs, collector, dims);
+      //      } else {
+      //        // System.out.println("union");
+      //        // position base scorer to the first matching doc
+      //        baseIterator.nextDoc();
+      //        doUnionScoring(acceptDocs, collector, dims);
+      //      }
     } finally {
       // TODO: What's the right behavior when a collector throws CollectionTerminatedException?
       // Should we stop scoring immediately (what we're doing now), or should we keep scoring until
@@ -354,6 +356,7 @@ class DrillSidewaysScorer extends BulkScorer {
   }
 
   /** Used when drill downs are highly constraining vs baseQuery. */
+  @SuppressWarnings("unused")
   private void doDrillDownAdvanceScoring(
       Bits acceptDocs, LeafCollector collector, DocsAndCost[] dims) throws IOException {
     setScorer(collector, new Score());
@@ -563,6 +566,7 @@ class DrillSidewaysScorer extends BulkScorer {
     }
   }
 
+  @SuppressWarnings("unused")
   private void doUnionScoring(Bits acceptDocs, LeafCollector collector, DocsAndCost[] dims)
       throws IOException {
     // if (DEBUG) {
