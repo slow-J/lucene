@@ -18,6 +18,8 @@ package org.apache.lucene.codecs.blocktreeords;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.ArrayDeque;
+import java.util.Iterator;
 import org.apache.lucene.codecs.BlockTermState;
 import org.apache.lucene.codecs.blocktreeords.FSTOrdsOutputs.Output;
 import org.apache.lucene.index.BaseTermsEnum;
@@ -43,7 +45,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
 
   // static boolean DEBUG = true;
 
-  private OrdsSegmentTermsEnumFrame[] stack;
+  private final ArrayDeque<OrdsSegmentTermsEnumFrame> stack;
   private final OrdsSegmentTermsEnumFrame staticFrame;
   OrdsSegmentTermsEnumFrame currentFrame;
   boolean termExists;
@@ -71,7 +73,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
     this.fr = fr;
 
     // if (DEBUG) System.out.println("BTTR.init seg=" + segment);
-    stack = new OrdsSegmentTermsEnumFrame[0];
+    stack = new ArrayDeque<>();
 
     // Used to hold seek by TermState, or cached seek
     staticFrame = new OrdsSegmentTermsEnumFrame(this, -1);
@@ -117,18 +119,12 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
   }
 
   private OrdsSegmentTermsEnumFrame getFrame(int ord) throws IOException {
-    if (ord >= stack.length) {
-      final OrdsSegmentTermsEnumFrame[] next =
-          new OrdsSegmentTermsEnumFrame
-              [ArrayUtil.oversize(1 + ord, RamUsageEstimator.NUM_BYTES_OBJECT_REF)];
-      System.arraycopy(stack, 0, next, 0, stack.length);
-      for (int stackOrd = stack.length; stackOrd < next.length; stackOrd++) {
-        next[stackOrd] = new OrdsSegmentTermsEnumFrame(this, stackOrd);
-      }
-      stack = next;
+    while (ord >= stack.size()) {
+      stack.addLast(new OrdsSegmentTermsEnumFrame(this, stack.size()));
     }
-    assert stack[ord].ord == ord;
-    return stack[ord];
+    OrdsSegmentTermsEnumFrame frame = stack.stream().skip(ord).findFirst().get();
+    assert frame.ord == ord;
+    return frame;
   }
 
   private FST.Arc<Output> getArc(int ord) {
@@ -279,7 +275,8 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
       output = arc.output();
       targetUpto = 0;
 
-      OrdsSegmentTermsEnumFrame lastFrame = stack[0];
+      Iterator<OrdsSegmentTermsEnumFrame> stackIterator = stack.iterator();
+      OrdsSegmentTermsEnumFrame lastFrame = stackIterator.next();
       assert validIndexPrefix <= term.length();
 
       final int targetLimit = Math.min(target.length, validIndexPrefix);
@@ -311,7 +308,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
           output = OrdsBlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output());
         }
         if (arc.isFinal()) {
-          lastFrame = stack[1 + lastFrame.ord];
+          lastFrame = stackIterator.next();
         }
         targetUpto++;
       }
@@ -566,7 +563,8 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
       output = arc.output();
       targetUpto = 0;
 
-      OrdsSegmentTermsEnumFrame lastFrame = stack[0];
+      Iterator<OrdsSegmentTermsEnumFrame> frameIterator = stack.iterator();
+      OrdsSegmentTermsEnumFrame lastFrame = frameIterator.next();
       assert validIndexPrefix <= term.length();
 
       final int targetLimit = Math.min(target.length, validIndexPrefix);
@@ -603,7 +601,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
           output = OrdsBlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output());
         }
         if (arc.isFinal()) {
-          lastFrame = stack[1 + lastFrame.ord];
+          lastFrame = frameIterator.next();
         }
         targetUpto++;
       }
@@ -987,7 +985,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
           return null;
         }
         final long lastFP = currentFrame.fpOrig;
-        currentFrame = stack[currentFrame.ord - 1];
+        currentFrame = stack.stream().skip(currentFrame.ord - 1).findFirst().get();
 
         if (currentFrame.nextEnt == -1 || currentFrame.lastSubFP != lastFP) {
           // We popped into a frame that's not loaded

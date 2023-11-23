@@ -18,6 +18,8 @@ package org.apache.lucene.sandbox.codecs.idversion;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.ArrayDeque;
+import java.util.Iterator;
 import org.apache.lucene.codecs.BlockTermState;
 import org.apache.lucene.index.BaseTermsEnum;
 import org.apache.lucene.index.ImpactsEnum;
@@ -46,7 +48,7 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
 
   // static boolean DEBUG = false;
 
-  private IDVersionSegmentTermsEnumFrame[] stack;
+  private final ArrayDeque<IDVersionSegmentTermsEnumFrame> stack;
   private final IDVersionSegmentTermsEnumFrame staticFrame;
   IDVersionSegmentTermsEnumFrame currentFrame;
   boolean termExists;
@@ -72,7 +74,7 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
     this.fr = fr;
 
     // if (DEBUG) System.out.println("BTTR.init seg=" + segment);
-    stack = new IDVersionSegmentTermsEnumFrame[0];
+    stack = new ArrayDeque<>();
 
     // Used to hold seek by TermState, or cached seek
     staticFrame = new IDVersionSegmentTermsEnumFrame(this, -1);
@@ -119,18 +121,12 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
   }
 
   private IDVersionSegmentTermsEnumFrame getFrame(int ord) throws IOException {
-    if (ord >= stack.length) {
-      final IDVersionSegmentTermsEnumFrame[] next =
-          new IDVersionSegmentTermsEnumFrame
-              [ArrayUtil.oversize(1 + ord, RamUsageEstimator.NUM_BYTES_OBJECT_REF)];
-      System.arraycopy(stack, 0, next, 0, stack.length);
-      for (int stackOrd = stack.length; stackOrd < next.length; stackOrd++) {
-        next[stackOrd] = new IDVersionSegmentTermsEnumFrame(this, stackOrd);
-      }
-      stack = next;
+    while (ord >= stack.size()) {
+      stack.addLast(new IDVersionSegmentTermsEnumFrame(this, stack.size()));
     }
-    assert stack[ord].ord == ord;
-    return stack[ord];
+    IDVersionSegmentTermsEnumFrame frame = stack.stream().skip(ord).findFirst().get();
+    assert frame.ord == ord;
+    return frame;
   }
 
   private FST.Arc<Pair<BytesRef, Long>> getArc(int ord) {
@@ -294,7 +290,8 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
       output = arc.output();
       targetUpto = 0;
 
-      IDVersionSegmentTermsEnumFrame lastFrame = stack[0];
+      Iterator<IDVersionSegmentTermsEnumFrame> stackIterator = stack.iterator();
+      IDVersionSegmentTermsEnumFrame lastFrame = stackIterator.next();
       assert validIndexPrefix <= term.length()
           : "validIndexPrefix="
               + validIndexPrefix
@@ -336,7 +333,7 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
           output = VersionBlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output());
         }
         if (arc.isFinal()) {
-          lastFrame = stack[1 + lastFrame.ord];
+          lastFrame = stackIterator.next();
         }
         targetUpto++;
       }
@@ -685,7 +682,8 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
       output = arc.output();
       targetUpto = 0;
 
-      IDVersionSegmentTermsEnumFrame lastFrame = stack[0];
+      Iterator<IDVersionSegmentTermsEnumFrame> frameIterator = stack.iterator();
+      IDVersionSegmentTermsEnumFrame lastFrame = frameIterator.next();
       assert validIndexPrefix <= term.length();
 
       final int targetLimit = Math.min(target.length, validIndexPrefix);
@@ -722,7 +720,7 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
           output = VersionBlockTreeTermsWriter.FST_OUTPUTS.add(output, arc.output());
         }
         if (arc.isFinal()) {
-          lastFrame = stack[1 + lastFrame.ord];
+          lastFrame = frameIterator.next();
         }
         targetUpto++;
       }
@@ -1098,7 +1096,7 @@ public final class IDVersionSegmentTermsEnum extends BaseTermsEnum {
           return null;
         }
         final long lastFP = currentFrame.fpOrig;
-        currentFrame = stack[currentFrame.ord - 1];
+        currentFrame = stack.stream().skip(currentFrame.ord - 1).findFirst().get();
 
         if (currentFrame.nextEnt == -1 || currentFrame.lastSubFP != lastFP) {
           // We popped into a frame that's not loaded
