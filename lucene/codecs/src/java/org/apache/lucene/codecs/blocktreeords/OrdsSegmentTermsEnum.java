@@ -73,7 +73,7 @@ public final class OrdsSegmentTermsEnum extends BaseTermsEnum {
     this.fr = fr;
 
     // if (DEBUG) System.out.println("BTTR.init seg=" + segment);
-    stack = new ArrayDeque<>();
+    stack = new ArrayDeque<>(256);
 
     // Used to hold seek by TermState, or cached seek
     staticFrame = new OrdsSegmentTermsEnumFrame(this, -1);
