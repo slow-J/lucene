@@ -611,4 +611,19 @@ final class NativeVectorUtilSupport implements VectorUtilSupport {
         MemorySegment.ofArray(arr),
         arr.length);
   }
+
+  @Override
+  public void osqLossSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    delegateVectorUtilSupport.osqLossSums(vector, lower, upper, points, sums);
+  }
+
+  @Override
+  public void osqDescentSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    delegateVectorUtilSupport.osqDescentSums(vector, lower, upper, points, sums);
+  }
+
+  @Override
+  public int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    return delegateVectorUtilSupport.osqAssign(vector, lower, upper, step, dest);
+  }
 }

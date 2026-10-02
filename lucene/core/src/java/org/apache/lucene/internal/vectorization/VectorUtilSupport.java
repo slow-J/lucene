@@ -183,4 +183,54 @@ public interface VectorUtilSupport {
    * beneficial here because the block size is 256.
    */
   void expand8(int[] arr);
+
+  /**
+   * The loss sums of {@code OptimizedScalarQuantizer} for the quantization interval {@code [lower,
+   * upper]} with {@code points} levels: {@code sums[0] = sum(x * (x - xq))} and {@code sums[1] =
+   * sum((x - xq)^2)} over the components {@code x} of {@code vector}, where {@code xq = lower +
+   * step * Math.round((clamp(x, lower, upper) - lower) * (1 / step))} with {@code step = (upper -
+   * lower) / (points - 1)}, all in double.
+   *
+   * <p>Every implementation adds the same values in the same order as the scalar one, so the sums
+   * are bit-identical across implementations.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at least 2
+   * @param sums destination of length at least 2
+   */
+  void osqLossSums(float[] vector, float lower, float upper, int points, double[] sums);
+
+  /**
+   * The coordinate-descent sums of {@code OptimizedScalarQuantizer} for the quantization interval
+   * {@code [lower, upper]} with {@code points} levels: {@code sums[0..4] = sum((1 - s)^2), sum((1 -
+   * s) * s), sum(s * s), sum(x * (1 - s)), sum(x * s)} over the components {@code x} of {@code
+   * vector}, where {@code s = k / (points - 1)} in float and {@code k = Math.round((clamp(x, lower,
+   * upper) - lower) * ((points - 1) / (upper - lower)))}.
+   *
+   * <p>Every implementation adds the same values in the same order as the scalar one, so the sums
+   * are bit-identical across implementations.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at least 2
+   * @param sums destination of length at least 5
+   */
+  void osqDescentSums(float[] vector, float lower, float upper, int points, double[] sums);
+
+  /**
+   * Writes {@code (byte) Math.round((clamp(x, lower, upper) - lower) / step)}, computed in float,
+   * for each component {@code x} of {@code vector} to {@code dest} and returns the sum of the
+   * rounded values before narrowing, bit-identical to the scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param step the grid step
+   * @param dest destination, at least as long as {@code vector}
+   * @return the sum of the rounded values
+   */
+  int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest);
 }

@@ -628,4 +628,69 @@ public final class VectorUtil {
   public static void expand8(int[] arr) {
     IMPL.expand8(arr);
   }
+
+  /**
+   * The loss sums {@code OptimizedScalarQuantizer} needs for the quantization interval {@code
+   * [lower, upper]} with {@code points} levels, bit-identical to its scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at least 2
+   * @param sums destination for the two sums
+   * @lucene.internal
+   */
+  public static void osqLossSums(
+      float[] vector, float lower, float upper, int points, double[] sums) {
+    checkOsqSums(points, sums, 2);
+    IMPL.osqLossSums(vector, lower, upper, points, sums);
+  }
+
+  /**
+   * The coordinate-descent sums {@code OptimizedScalarQuantizer} needs for the quantization
+   * interval {@code [lower, upper]} with {@code points} levels, bit-identical to its scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at least 2
+   * @param sums destination for the five sums
+   * @lucene.internal
+   */
+  public static void osqDescentSums(
+      float[] vector, float lower, float upper, int points, double[] sums) {
+    checkOsqSums(points, sums, 5);
+    IMPL.osqDescentSums(vector, lower, upper, points, sums);
+  }
+
+  private static void checkOsqSums(int points, double[] sums, int count) {
+    if (points < 2) {
+      throw new IllegalArgumentException("points must be at least 2: " + points);
+    }
+    if (sums.length < count) {
+      throw new IllegalArgumentException(
+          "sums must have at least " + count + " entries: " + sums.length);
+    }
+  }
+
+  /**
+   * Writes {@code (byte) Math.round((clamp(x, lower, upper) - lower) / step)}, computed in float,
+   * for each component {@code x} of {@code vector} to {@code dest} and returns the sum of the
+   * rounded values before narrowing, bit-identical to the scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param step the grid step
+   * @param dest destination, at least as long as {@code vector}
+   * @return the sum of the rounded values
+   * @lucene.internal
+   */
+  public static int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    if (dest.length < vector.length) {
+      throw new IllegalArgumentException(
+          "dest is shorter than vector: " + dest.length + " < " + vector.length);
+    }
+    return IMPL.osqAssign(vector, lower, upper, step, dest);
+  }
 }

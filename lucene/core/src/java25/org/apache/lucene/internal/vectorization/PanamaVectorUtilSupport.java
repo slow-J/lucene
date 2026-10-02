@@ -66,6 +66,8 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
   // This create a vector species which we make sure have exact half bits of DOUBLE_SPECIES
   private static final VectorSpecies<Integer> INT_FOR_DOUBLE_SPECIES =
       VectorSpecies.of(int.class, VectorShape.forBitSize(DOUBLE_SPECIES.vectorBitSize() / 2));
+  private static final VectorSpecies<Float> FLOAT_FOR_DOUBLE_SPECIES =
+      INT_FOR_DOUBLE_SPECIES.withLanes(float.class);
   private static final VectorSpecies<Integer> INT_SPECIES =
       PanamaVectorConstants.PRERERRED_INT_SPECIES;
   private static final VectorSpecies<Byte> BYTE_SPECIES;
@@ -1556,5 +1558,202 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
         arr[192 + i] = l & 0xFF;
       }
     }
+  }
+
+  // components per block in the osq sums: their terms are vectorized into small scratch arrays,
+  // then
+  // summed in order
+  private static final int OSQ_BLOCK = 64;
+
+  @Override
+  public void osqLossSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    double step = (((double) upper - lower) / (points - 1.0F));
+    double stepInv = 1.0 / step;
+    if (points < 2 || lower < upper == false || Float.isFinite(upper - lower) == false) {
+      // outside the range where the scaled components below lie in [0, 2^51), where roundHalfUp is
+      // exact
+      DefaultVectorUtilSupport.scalarOsqLossSums(vector, lower, upper, points, sums);
+      return;
+    }
+    DoubleVector lo = DoubleVector.broadcast(DOUBLE_SPECIES, lower);
+    DoubleVector hi = DoubleVector.broadcast(DOUBLE_SPECIES, upper);
+    int blockSize = Math.min(OSQ_BLOCK, vector.length);
+    double[] xeTerms = new double[blockSize];
+    double[] eTerms = new double[blockSize];
+    double xe = 0.0;
+    double e = 0.0;
+    for (int from = 0; from < vector.length; from += blockSize) {
+      int length = Math.min(blockSize, vector.length - from);
+      int j = 0;
+      for (int bound = DOUBLE_SPECIES.loopBound(length); j < bound; j += DOUBLE_SPECIES.length()) {
+        DoubleVector x =
+            (DoubleVector)
+                FloatVector.fromArray(FLOAT_FOR_DOUBLE_SPECIES, vector, from + j)
+                    .convertShape(VectorOperators.F2D, DOUBLE_SPECIES, 0);
+        DoubleVector k = roundHalfUp(x.max(lo).min(hi).sub(lo).mul(stepInv));
+        // NaN components round to 0, as with Math.round
+        k = k.blend(0.0, k.test(VectorOperators.IS_NAN));
+        DoubleVector d = x.sub(k.mul(step).add(lo));
+        x.mul(d).intoArray(xeTerms, j);
+        d.mul(d).intoArray(eTerms, j);
+      }
+      for (; j < length; j++) {
+        double x = vector[from + j];
+        double xq =
+            lower + step * Math.round((Math.min(Math.max(x, lower), upper) - lower) * stepInv);
+        xeTerms[j] = x * (x - xq);
+        eTerms[j] = (x - xq) * (x - xq);
+      }
+      for (j = 0; j < length; j++) {
+        xe += xeTerms[j];
+        e += eTerms[j];
+      }
+    }
+    sums[0] = xe;
+    sums[1] = e;
+  }
+
+  @Override
+  public void osqDescentSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    float stepInv = (points - 1.0f) / (upper - lower);
+    if (points < 2
+        || lower < upper == false
+        || Float.isFinite(upper - lower) == false
+        || Float.isFinite(stepInv) == false
+        || points > OsqLevels.MAX_POINTS) {
+      // outside the range where every level below lands in [0, points)
+      DefaultVectorUtilSupport.scalarOsqDescentSums(vector, lower, upper, points, sums);
+      return;
+    }
+    OsqLevels levels = OsqLevels.of(points);
+    DoubleVector lo = DoubleVector.broadcast(DOUBLE_SPECIES, lower);
+    DoubleVector hi = DoubleVector.broadcast(DOUBLE_SPECIES, upper);
+    int blockSize = Math.min(OSQ_BLOCK, vector.length);
+    int[] ks = new int[blockSize];
+    double daa = 0;
+    double dab = 0;
+    double dbb = 0;
+    double dax = 0;
+    double dbx = 0;
+    for (int from = 0; from < vector.length; from += blockSize) {
+      int length = Math.min(blockSize, vector.length - from);
+      int j = 0;
+      for (int bound = DOUBLE_SPECIES.loopBound(length); j < bound; j += DOUBLE_SPECIES.length()) {
+        DoubleVector x =
+            (DoubleVector)
+                FloatVector.fromArray(FLOAT_FOR_DOUBLE_SPECIES, vector, from + j)
+                    .convertShape(VectorOperators.F2D, DOUBLE_SPECIES, 0);
+        // the conversion takes NaN components to 0, as with Math.round
+        ((IntVector)
+                roundHalfUp(x.max(lo).min(hi).sub(lo).mul(stepInv))
+                    .convertShape(VectorOperators.D2I, INT_FOR_DOUBLE_SPECIES, 0))
+            .intoArray(ks, j);
+      }
+      for (; j < length; j++) {
+        double c = Math.min(Math.max(vector[from + j], (double) lower), upper) - lower;
+        ks[j] = (int) Math.round(c * stepInv);
+      }
+      for (j = 0; j < length; j++) {
+        float xi = vector[from + j];
+        int k = ks[j];
+        daa += levels.aa[k];
+        dab += levels.ab[k];
+        dbb += levels.ss[k];
+        dax += xi * levels.oms[k];
+        dbx += xi * levels.s[k];
+      }
+    }
+    sums[0] = daa;
+    sums[1] = dab;
+    sums[2] = dbb;
+    sums[3] = dax;
+    sums[4] = dbx;
+  }
+
+  /**
+   * {@code Math.round} of each lane, exact for {@code 0 <= v < 2^51}: adding and subtracting 2^52
+   * rounds to the nearest even integer, then a lane exactly half way above it moves up.
+   */
+  private static DoubleVector roundHalfUp(DoubleVector v) {
+    DoubleVector r = v.add(0x1p52).sub(0x1p52);
+    return r.add(1.0, v.sub(r).compare(VectorOperators.EQ, 0.5));
+  }
+
+  /** The coordinate-descent terms of each level, as the scalar loop computes them. */
+  private static final class OsqLevels {
+    // 8 bits; with ~2^22 points the float grid could round a component up to level points
+    static final int MAX_POINTS = 1 << 8;
+    // for 2^bits levels, bits in [1, 8]
+    private static final OsqLevels[] BY_BITS = new OsqLevels[9];
+
+    static {
+      for (int bits = 1; bits <= 8; bits++) {
+        BY_BITS[bits] = new OsqLevels(1 << bits);
+      }
+    }
+
+    final float[] s;
+    final float[] ss;
+    final double[] oms;
+    final double[] aa;
+    final double[] ab;
+
+    private OsqLevels(int points) {
+      s = new float[points];
+      ss = new float[points];
+      oms = new double[points];
+      aa = new double[points];
+      ab = new double[points];
+      for (int k = 0; k < points; k++) {
+        float kf = k;
+        s[k] = kf / (points - 1);
+        ss[k] = s[k] * s[k];
+        oms[k] = 1.0 - s[k];
+        aa[k] = (1.0 - s[k]) * (1.0 - s[k]);
+        ab[k] = (1.0 - s[k]) * s[k];
+      }
+    }
+
+    static OsqLevels of(int points) {
+      int bits = Integer.numberOfTrailingZeros(points);
+      return points == 1 << bits && bits >= 1 && bits <= 8 ? BY_BITS[bits] : new OsqLevels(points);
+    }
+  }
+
+  @Override
+  public int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    float maxLevel = (upper - lower) / step;
+    if (lower < upper == false || maxLevel > 0 == false || maxLevel < 0x1p31f == false) {
+      // outside the range where every level below lands in [0, 2^31)
+      return DefaultVectorUtilSupport.scalarOsqAssign(vector, 0, lower, upper, step, dest);
+    }
+    FloatVector lo = FloatVector.broadcast(FLOAT_SPECIES, lower);
+    FloatVector hi = FloatVector.broadcast(FLOAT_SPECIES, upper);
+    FloatVector st = FloatVector.broadcast(FLOAT_SPECIES, step);
+    IntVector sums = IntVector.zero(INT_SPECIES);
+    int lanes = FLOAT_SPECIES.length();
+    int i = 0;
+    // four int vectors of levels narrow into one byte vector of the same shape
+    for (int bound = vector.length - vector.length % (4 * lanes); i < bound; i += 4 * lanes) {
+      ByteVector out = ByteVector.zero(BYTE_SPECIES_FULL);
+      for (int part = 0; part < 4; part++) {
+        FloatVector t =
+            FloatVector.fromArray(FLOAT_SPECIES, vector, i + part * lanes)
+                .max(lo)
+                .min(hi)
+                .sub(lo)
+                .div(st);
+        // t is in [0, 2^31) or NaN, which converts to 0, so Math.round(t) is its truncation plus 1
+        // when the fraction is at least a half, that is when twice the fraction truncates to 1
+        IntVector k = (IntVector) t.convert(VectorOperators.F2I, 0);
+        FloatVector frac = t.sub((FloatVector) k.convert(VectorOperators.I2F, 0));
+        k = k.add((IntVector) frac.add(frac).convert(VectorOperators.F2I, 0));
+        sums = sums.add(k);
+        out = out.or((ByteVector) k.convert(VectorOperators.I2B, -part));
+      }
+      out.intoArray(dest, i);
+    }
+    return sums.reduceLanes(ADD)
+        + DefaultVectorUtilSupport.scalarOsqAssign(vector, i, lower, upper, step, dest);
   }
 }
