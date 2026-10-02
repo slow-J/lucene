@@ -628,4 +628,67 @@ public final class VectorUtil {
   public static void expand8(int[] arr) {
     IMPL.expand8(arr);
   }
+
+  /**
+   * Grid statistics of {@code vector} for the optimized scalar quantizer's interval search; see
+   * {@link org.apache.lucene.internal.vectorization.VectorUtilSupport#osqGridStats}.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at most 256
+   * @param stats destination, at least 6 long
+   * @lucene.internal
+   */
+  public static void osqGridStats(
+      float[] vector, float lower, float upper, int points, double[] stats) {
+    if (points < 2 || points > 256) {
+      throw new IllegalArgumentException("points must be in [2, 256]: " + points);
+    }
+    if (stats.length < 6) {
+      throw new IllegalArgumentException("stats must have at least 6 entries: " + stats.length);
+    }
+    IMPL.osqGridStats(vector, lower, upper, points, stats);
+  }
+
+  /**
+   * Centers {@code vector} on {@code centroid} in place and gathers its statistics for the
+   * optimized scalar quantizer; see {@link
+   * org.apache.lucene.internal.vectorization.VectorUtilSupport#osqCenter}.
+   *
+   * @param vector the vector, centered in place
+   * @param centroid the centroid, same length
+   * @param stats destination, at least 5 long
+   * @lucene.internal
+   */
+  public static void osqCenter(float[] vector, float[] centroid, float[] stats) {
+    if (vector.length != centroid.length) {
+      throw new IllegalArgumentException(
+          "vector dimensions differ: " + vector.length + "!=" + centroid.length);
+    }
+    if (stats.length < 5) {
+      throw new IllegalArgumentException("stats must have at least 5 entries: " + stats.length);
+    }
+    IMPL.osqCenter(vector, centroid, stats);
+  }
+
+  /**
+   * Writes {@code Math.round((clamp(x, lower, upper) - lower) / step)} for each component {@code x}
+   * of {@code vector} to {@code dest} and returns their sum, bit-identical to the scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param step the grid step
+   * @param dest destination, at least as long as {@code vector}
+   * @return the sum of the written values
+   * @lucene.internal
+   */
+  public static int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    if (dest.length < vector.length) {
+      throw new IllegalArgumentException(
+          "dest is shorter than vector: " + dest.length + " < " + vector.length);
+    }
+    return IMPL.osqAssign(vector, lower, upper, step, dest);
+  }
 }

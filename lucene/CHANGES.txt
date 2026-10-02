@@ -593,6 +593,9 @@ Optimizations
 * GITHUB#16667: Rewrite BooleanQuery to MatchNoDocsQuery when it has MUST_NOT clause matching one of
   its MUST boost or constant score query clauses. (Egor Potemkin)
 
+* GITHUB#XXXXX: Vectorize OptimizedScalarQuantizer via VectorUtilSupport. Sums are reassociated, so a
+  component on a rounding boundary can quantize one level away from before. (Jakub Slowinski)
+
 Bug Fixes
 ---------------------
 * GITHUB#10153: Allow configurable buffer size in SegmentingTokenizerBase and recognize whitespace as safe boundary in ThaiTokenizer to avoid splitting words across buffer boundaries. (Kamthorn Krairaksa)

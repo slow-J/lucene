@@ -1557,4 +1557,147 @@ final class PanamaVectorUtilSupport implements VectorUtilSupport {
       }
     }
   }
+
+  // osqGridStats sums k * k in int lanes: exact while each lane sees fewer than 2^31 / 255^2 values
+  private static final int OSQ_MAX_INT_LANE_DIMS = 1 << 16;
+
+  @Override
+  public void osqGridStats(float[] vector, float lower, float upper, int points, double[] stats) {
+    if (vector.length >= OSQ_MAX_INT_LANE_DIMS) {
+      DefaultVectorUtilSupport.scalarOsqGridStats(vector, lower, upper, points, stats);
+      return;
+    }
+    float stepInv = (points - 1f) / (upper - lower);
+    float step = (upper - lower) / (points - 1f);
+    FloatVector lo = FloatVector.broadcast(FLOAT_SPECIES, lower);
+    FloatVector hi = FloatVector.broadcast(FLOAT_SPECIES, upper);
+    FloatVector inv = FloatVector.broadcast(FLOAT_SPECIES, stepInv);
+    FloatVector st = FloatVector.broadcast(FLOAT_SPECIES, step);
+    FloatVector half = FloatVector.broadcast(FLOAT_SPECIES, 0.5f);
+    IntVector accK = IntVector.zero(INT_SPECIES);
+    IntVector accKK = IntVector.zero(INT_SPECIES);
+    FloatVector accXK = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector accXD = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector accDD = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector accX = FloatVector.zero(FLOAT_SPECIES);
+    int i = 0;
+    for (int bound = FLOAT_SPECIES.loopBound(vector.length);
+        i < bound;
+        i += FLOAT_SPECIES.length()) {
+      FloatVector x = FloatVector.fromArray(FLOAT_SPECIES, vector, i);
+      // x - lower >= 0 after the clamp, so adding a half and truncating rounds like Math.round;
+      // plain mul/add keeps k identical to the scalar implementation
+      IntVector k =
+          (IntVector) x.max(lo).min(hi).sub(lo).mul(inv).add(half).convert(VectorOperators.F2I, 0);
+      FloatVector kf = (FloatVector) k.convert(VectorOperators.I2F, 0);
+      FloatVector d = x.sub(kf.mul(st).add(lo));
+      accK = accK.add(k);
+      accKK = k.mul(k).add(accKK);
+      accXK = fma(x, kf, accXK);
+      accXD = fma(x, d, accXD);
+      accDD = fma(d, d, accDD);
+      accX = accX.add(x);
+    }
+    long sumK = accK.reduceLanesToLong(ADD);
+    long sumKK = accKK.reduceLanesToLong(ADD);
+    double sumXK = accXK.reduceLanes(ADD);
+    double sumXD = accXD.reduceLanes(ADD);
+    double sumDD = accDD.reduceLanes(ADD);
+    double sumX = accX.reduceLanes(ADD);
+    for (; i < vector.length; i++) {
+      float x = vector[i];
+      int k = (int) ((Math.min(Math.max(x, lower), upper) - lower) * stepInv + 0.5f);
+      float d = x - (lower + k * step);
+      sumK += k;
+      sumKK += k * k;
+      sumXK += x * k;
+      sumXD += x * d;
+      sumDD += d * d;
+      sumX += x;
+    }
+    stats[0] = sumK;
+    stats[1] = sumKK;
+    stats[2] = sumXK;
+    stats[3] = sumXD;
+    stats[4] = sumDD;
+    stats[5] = sumX;
+  }
+
+  @Override
+  public void osqCenter(float[] vector, float[] centroid, float[] stats) {
+    float dot = 0;
+    float min = Float.MAX_VALUE;
+    float max = -Float.MAX_VALUE;
+    float sumSq = 0;
+    float sum = 0;
+    int bound = FLOAT_SPECIES.loopBound(vector.length);
+    // the scalar tail first, so the lane partial sums fold into it below
+    for (int j = bound; j < vector.length; j++) {
+      dot += vector[j] * centroid[j];
+      float x = vector[j] - centroid[j];
+      vector[j] = x;
+      min = Math.min(min, x);
+      max = Math.max(max, x);
+      sumSq += x * x;
+      sum += x;
+    }
+    FloatVector lanesDot = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector lanesSq = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector lanesSum = FloatVector.zero(FLOAT_SPECIES);
+    FloatVector lanesMin = FloatVector.broadcast(FLOAT_SPECIES, min);
+    FloatVector lanesMax = FloatVector.broadcast(FLOAT_SPECIES, max);
+    for (int j = 0; j < bound; j += FLOAT_SPECIES.length()) {
+      FloatVector raw = FloatVector.fromArray(FLOAT_SPECIES, vector, j);
+      FloatVector mid = FloatVector.fromArray(FLOAT_SPECIES, centroid, j);
+      lanesDot = fma(raw, mid, lanesDot);
+      FloatVector centered = raw.sub(mid);
+      centered.intoArray(vector, j);
+      lanesMin = lanesMin.min(centered);
+      lanesMax = lanesMax.max(centered);
+      lanesSq = fma(centered, centered, lanesSq);
+      lanesSum = lanesSum.add(centered);
+    }
+    stats[0] = dot + lanesDot.reduceLanes(ADD);
+    stats[1] = lanesMin.reduceLanes(VectorOperators.MIN);
+    stats[2] = lanesMax.reduceLanes(VectorOperators.MAX);
+    stats[3] = sumSq + lanesSq.reduceLanes(ADD);
+    stats[4] = sum + lanesSum.reduceLanes(ADD);
+  }
+
+  @Override
+  public int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    float maxLevel = (upper - lower) / step;
+    if (lower < upper == false || maxLevel > 0 == false || maxLevel < 0x1p31f == false) {
+      // outside the range where every level below lands in [0, 2^31)
+      return DefaultVectorUtilSupport.scalarOsqAssign(vector, 0, lower, upper, step, dest);
+    }
+    FloatVector lo = FloatVector.broadcast(FLOAT_SPECIES, lower);
+    FloatVector hi = FloatVector.broadcast(FLOAT_SPECIES, upper);
+    FloatVector st = FloatVector.broadcast(FLOAT_SPECIES, step);
+    IntVector sums = IntVector.zero(INT_SPECIES);
+    int lanes = FLOAT_SPECIES.length();
+    int i = 0;
+    // four int vectors of levels narrow into one byte vector of the same shape
+    for (int bound = vector.length - vector.length % (4 * lanes); i < bound; i += 4 * lanes) {
+      ByteVector out = ByteVector.zero(BYTE_SPECIES_FULL);
+      for (int part = 0; part < 4; part++) {
+        FloatVector t =
+            FloatVector.fromArray(FLOAT_SPECIES, vector, i + part * lanes)
+                .max(lo)
+                .min(hi)
+                .sub(lo)
+                .div(st);
+        // t is in [0, 2^31) or NaN, which converts to 0, so Math.round(t) is its truncation plus 1
+        // when the fraction is at least a half, that is when twice the fraction truncates to 1
+        IntVector k = (IntVector) t.convert(VectorOperators.F2I, 0);
+        FloatVector frac = t.sub((FloatVector) k.convert(VectorOperators.I2F, 0));
+        k = k.add((IntVector) frac.add(frac).convert(VectorOperators.F2I, 0));
+        sums = sums.add(k);
+        out = out.or((ByteVector) k.convert(VectorOperators.I2B, -part));
+      }
+      out.intoArray(dest, i);
+    }
+    return sums.reduceLanes(ADD)
+        + DefaultVectorUtilSupport.scalarOsqAssign(vector, i, lower, upper, step, dest);
+  }
 }

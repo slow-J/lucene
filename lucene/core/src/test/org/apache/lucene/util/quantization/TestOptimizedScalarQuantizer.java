@@ -286,6 +286,194 @@ public class TestOptimizedScalarQuantizer extends LuceneTestCase {
         actual.quantizedComponentSum());
   }
 
+  /**
+   * The vectorized quantizer sums in a different order than {@link ScalarReference}, the plain
+   * loops, so the coordinate descent can stop on a slightly different interval for some vectors,
+   * better or worse. Across many vectors the intervals must be as good as the reference's, by the
+   * reference's own loss.
+   */
+  public void testCloseToScalarReference() {
+    for (VectorSimilarityFunction similarityFunction : VectorSimilarityFunction.values()) {
+      int dims = randomIntBetween(16, 1024);
+      float[][] vectors = new float[200][dims];
+      float[] centroid = new float[dims];
+      for (int i = 0; i < dims; ++i) {
+        centroid[i] = (float) random().nextGaussian();
+      }
+      for (float[] vector : vectors) {
+        for (int i = 0; i < dims; ++i) {
+          vector[i] = centroid[i] + (float) random().nextGaussian();
+        }
+        if (similarityFunction == VectorSimilarityFunction.COSINE) {
+          VectorUtil.l2normalize(vector);
+        }
+      }
+      if (similarityFunction == VectorSimilarityFunction.COSINE) {
+        VectorUtil.l2normalize(centroid);
+      }
+      OptimizedScalarQuantizer osq = new OptimizedScalarQuantizer(similarityFunction);
+      ScalarReference reference = new ScalarReference(similarityFunction, 0.1f, 5);
+      for (byte bits : ALL_BITS) {
+        int points = 1 << bits;
+        double expectedLoss = 0;
+        double actualLoss = 0;
+        for (float[] vector : vectors) {
+          float[] expectedCentered = vector.clone();
+          OptimizedScalarQuantizer.QuantizationResult expected =
+              reference.scalarQuantize(expectedCentered, new byte[dims], bits, centroid);
+          OptimizedScalarQuantizer.QuantizationResult actual =
+              osq.scalarQuantize(vector.clone(), new byte[dims], bits, centroid);
+          float norm2 = 0;
+          for (float x : expectedCentered) {
+            norm2 += x * x;
+          }
+          expectedLoss +=
+              reference.loss(
+                  expectedCentered,
+                  new float[] {expected.lowerInterval(), expected.upperInterval()},
+                  points,
+                  norm2);
+          actualLoss +=
+              reference.loss(
+                  expectedCentered,
+                  new float[] {actual.lowerInterval(), actual.upperInterval()},
+                  points,
+                  norm2);
+        }
+        assertEquals(
+            similarityFunction + " dims=" + dims + " bits=" + bits,
+            1.0,
+            actualLoss / expectedLoss,
+            0.01);
+      }
+    }
+  }
+
+  /** {@link OptimizedScalarQuantizer#scalarQuantize} before vectorization: one plain loop each. */
+  private static final class ScalarReference {
+    private final VectorSimilarityFunction similarityFunction;
+    private final float lambda;
+    private final int iters;
+
+    ScalarReference(VectorSimilarityFunction similarityFunction, float lambda, int iters) {
+      this.similarityFunction = similarityFunction;
+      this.lambda = lambda;
+      this.iters = iters;
+    }
+
+    OptimizedScalarQuantizer.QuantizationResult scalarQuantize(
+        float[] vector, byte[] destination, byte bits, float[] centroid) {
+      float[] intervalScratch = new float[2];
+      int points = 1 << bits;
+      double vecMean = 0;
+      double vecVar = 0;
+      float norm2 = 0;
+      float centroidDot = 0;
+      float min = Float.MAX_VALUE;
+      float max = -Float.MAX_VALUE;
+      for (int i = 0; i < vector.length; ++i) {
+        if (similarityFunction != VectorSimilarityFunction.EUCLIDEAN) {
+          centroidDot += vector[i] * centroid[i];
+        }
+        vector[i] = vector[i] - centroid[i];
+        min = Math.min(min, vector[i]);
+        max = Math.max(max, vector[i]);
+        norm2 += (vector[i] * vector[i]);
+        double delta = vector[i] - vecMean;
+        vecMean += delta / (i + 1);
+        vecVar += delta * (vector[i] - vecMean);
+      }
+      vecVar /= vector.length;
+      double vecStd = Math.sqrt(vecVar);
+      intervalScratch[0] =
+          (float) clamp(MINIMUM_MSE_GRID[bits - 1][0] * vecStd + vecMean, min, max);
+      intervalScratch[1] =
+          (float) clamp(MINIMUM_MSE_GRID[bits - 1][1] * vecStd + vecMean, min, max);
+      optimizeIntervals(intervalScratch, vector, norm2, points);
+      float nSteps = ((1 << bits) - 1);
+      float a = intervalScratch[0];
+      float b = intervalScratch[1];
+      float step = (b - a) / nSteps;
+      int sumQuery = 0;
+      for (int h = 0; h < vector.length; h++) {
+        float xi = (float) clamp(vector[h], a, b);
+        int assignment = Math.round((xi - a) / step);
+        sumQuery += assignment;
+        destination[h] = (byte) assignment;
+      }
+      return new OptimizedScalarQuantizer.QuantizationResult(
+          intervalScratch[0],
+          intervalScratch[1],
+          similarityFunction == VectorSimilarityFunction.EUCLIDEAN ? norm2 : centroidDot,
+          sumQuery);
+    }
+
+    private double loss(float[] vector, float[] interval, int points, float norm2) {
+      double a = interval[0];
+      double b = interval[1];
+      double step = ((b - a) / (points - 1.0F));
+      double stepInv = 1.0 / step;
+      double xe = 0.0;
+      double e = 0.0;
+      for (double xi : vector) {
+        double xiq = (a + step * Math.round((clamp(xi, a, b) - a) * stepInv));
+        xe += xi * (xi - xiq);
+        e += (xi - xiq) * (xi - xiq);
+      }
+      return (1.0 - lambda) * xe * xe / norm2 + lambda * e;
+    }
+
+    private void optimizeIntervals(float[] initInterval, float[] vector, float norm2, int points) {
+      double initialLoss = loss(vector, initInterval, points, norm2);
+      final float scale = (1.0f - lambda) / norm2;
+      if (Float.isFinite(scale) == false) {
+        return;
+      }
+      for (int i = 0; i < iters; ++i) {
+        float a = initInterval[0];
+        float b = initInterval[1];
+        float stepInv = (points - 1.0f) / (b - a);
+        double daa = 0;
+        double dab = 0;
+        double dbb = 0;
+        double dax = 0;
+        double dbx = 0;
+        for (float xi : vector) {
+          float k = Math.round((clamp(xi, a, b) - a) * stepInv);
+          float s = k / (points - 1);
+          daa += (1.0 - s) * (1.0 - s);
+          dab += (1.0 - s) * s;
+          dbb += s * s;
+          dax += xi * (1.0 - s);
+          dbx += xi * s;
+        }
+        double m0 = scale * dax * dax + lambda * daa;
+        double m1 = scale * dax * dbx + lambda * dab;
+        double m2 = scale * dbx * dbx + lambda * dbb;
+        double det = m0 * m2 - m1 * m1;
+        if (det == 0) {
+          return;
+        }
+        float aOpt = (float) ((m2 * dax - m1 * dbx) / det);
+        float bOpt = (float) ((m0 * dbx - m1 * dax) / det);
+        if ((Math.abs(initInterval[0] - aOpt) < 1e-8 && Math.abs(initInterval[1] - bOpt) < 1e-8)) {
+          return;
+        }
+        double newLoss = loss(vector, new float[] {aOpt, bOpt}, points, norm2);
+        if (newLoss > initialLoss) {
+          return;
+        }
+        initInterval[0] = aOpt;
+        initInterval[1] = bOpt;
+        initialLoss = newLoss;
+      }
+    }
+
+    private static double clamp(double x, double a, double b) {
+      return Math.min(Math.max(x, a), b);
+    }
+  }
+
   public void testUnpackBinary() {
     int dim = randomIntBetween(1, 4096);
     QuantizedByteVectorValues.ScalarEncoding encoding =

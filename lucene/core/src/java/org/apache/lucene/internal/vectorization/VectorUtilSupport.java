@@ -183,4 +183,46 @@ public interface VectorUtilSupport {
    * beneficial here because the block size is 256.
    */
   void expand8(int[] arr);
+
+  /**
+   * Grid statistics of {@code vector} for the optimized scalar quantizer's interval search. Each
+   * component {@code x} gets the level {@code k = round((clamp(x, lower, upper) - lower) * (points
+   * - 1) / (upper - lower))}, which dequantizes to {@code x' = lower + k * (upper - lower) /
+   * (points - 1)}. Writes {@code stats[0] = sum(k)}, {@code stats[1] = sum(k * k)}, {@code stats[2]
+   * = sum(x * k)}, {@code stats[3] = sum(x * (x - x'))}, {@code stats[4] = sum((x - x') * (x -
+   * x'))} and {@code stats[5] = sum(x)}. The first two are exact; the others may be summed in any
+   * order.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param points number of quantization levels, at most 256
+   * @param stats destination, at least 6 long
+   */
+  void osqGridStats(float[] vector, float lower, float upper, int points, double[] stats);
+
+  /**
+   * Centers {@code vector} on {@code centroid} in place for the optimized scalar quantizer. Writes
+   * {@code stats[0] = dot(vector, centroid)} (before centering), then of the centered vector {@code
+   * stats[1] = min}, {@code stats[2] = max}, {@code stats[3] = sum(x * x)} and {@code stats[4] =
+   * sum(x)}. Centering, min and max are exact; the sums may be summed in any order.
+   *
+   * @param vector the vector, centered in place
+   * @param centroid the centroid, same length
+   * @param stats destination, at least 5 long
+   */
+  void osqCenter(float[] vector, float[] centroid, float[] stats);
+
+  /**
+   * Writes {@code Math.round((clamp(x, lower, upper) - lower) / step)} for each component {@code x}
+   * of {@code vector} to {@code dest} and returns their sum, bit-identical to the scalar loop.
+   *
+   * @param vector the centered vector
+   * @param lower lower bound of the interval
+   * @param upper upper bound of the interval
+   * @param step the grid step
+   * @param dest destination, at least as long as {@code vector}
+   * @return the sum of the written values
+   */
+  int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest);
 }
