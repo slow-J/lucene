@@ -18,7 +18,9 @@ package org.apache.lucene.benchmark.jmh;
 
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.util.VectorUtil;
+import org.apache.lucene.util.quantization.OptimizedScalarQuantizer;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -66,6 +68,9 @@ public class VectorUtilBenchmark {
   private float[] floatsB;
   private short[] shortsA;
   private short[] shortsB;
+  private float[] quantizeScratch;
+  private byte[] quantized;
+  private OptimizedScalarQuantizer quantizer;
   private int expectedHalfByteDotProduct;
   private int expectedHalfByteSquareDistance;
 
@@ -118,6 +123,9 @@ public class VectorUtilBenchmark {
       floatsB[i] = random.nextFloat();
       shortsB[i] = Float.floatToFloat16(floatsB[i]);
     }
+    quantizeScratch = new float[size];
+    quantized = new byte[size];
+    quantizer = new OptimizedScalarQuantizer(VectorSimilarityFunction.DOT_PRODUCT);
 
     // arrays for BBQ int4-bit and int4-dibit dot product benchmarks
     int4QuantizedBit = new byte[size * 4];
@@ -302,6 +310,20 @@ public class VectorUtilBenchmark {
   public byte[] binaryHalfByteUnpackVector() {
     VectorUtil.int4Unpack(halfBytesAPacked, halfBytesUnpackDest);
     return halfBytesUnpackDest;
+  }
+
+  // scalarQuantize centers its input in place, so each call quantizes a fresh copy of floatsA
+  @Benchmark
+  public OptimizedScalarQuantizer.QuantizationResult scalarQuantizeScalar() {
+    System.arraycopy(floatsA, 0, quantizeScratch, 0, size);
+    return quantizer.scalarQuantize(quantizeScratch, quantized, (byte) 4, floatsB);
+  }
+
+  @Benchmark
+  @Fork(jvmArgsPrepend = {"--add-modules=jdk.incubator.vector"})
+  public OptimizedScalarQuantizer.QuantizationResult scalarQuantizeVector() {
+    System.arraycopy(floatsA, 0, quantizeScratch, 0, size);
+    return quantizer.scalarQuantize(quantizeScratch, quantized, (byte) 4, floatsB);
   }
 
   @Benchmark

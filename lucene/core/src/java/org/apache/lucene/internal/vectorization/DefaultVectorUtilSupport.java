@@ -508,4 +508,81 @@ final class DefaultVectorUtilSupport implements VectorUtilSupport {
       arr[192 + i] = l & 0xFF;
     }
   }
+
+  @Override
+  public void osqLossSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    scalarOsqLossSums(vector, lower, upper, points, sums);
+  }
+
+  // OptimizedScalarQuantizer's loss loop
+  static void scalarOsqLossSums(
+      float[] vector, float lower, float upper, int points, double[] sums) {
+    double a = lower;
+    double b = upper;
+    double step = ((b - a) / (points - 1.0F));
+    double stepInv = 1.0 / step;
+    double xe = 0.0;
+    double e = 0.0;
+    for (double xi : vector) {
+      // this is quantizing and then dequantizing the vector
+      double xiq = (a + step * Math.round((clamp(xi, a, b) - a) * stepInv));
+      // how much does the de-quantized value differ from the original value
+      xe += xi * (xi - xiq);
+      e += (xi - xiq) * (xi - xiq);
+    }
+    sums[0] = xe;
+    sums[1] = e;
+  }
+
+  @Override
+  public void osqDescentSums(float[] vector, float lower, float upper, int points, double[] sums) {
+    scalarOsqDescentSums(vector, lower, upper, points, sums);
+  }
+
+  // OptimizedScalarQuantizer's coordinate-descent loop
+  static void scalarOsqDescentSums(
+      float[] vector, float lower, float upper, int points, double[] sums) {
+    float stepInv = (points - 1.0f) / (upper - lower);
+    double daa = 0;
+    double dab = 0;
+    double dbb = 0;
+    double dax = 0;
+    double dbx = 0;
+    for (float xi : vector) {
+      float k = Math.round((clamp(xi, lower, upper) - lower) * stepInv);
+      float s = k / (points - 1);
+      daa += (1.0 - s) * (1.0 - s);
+      dab += (1.0 - s) * s;
+      dbb += s * s;
+      dax += xi * (1.0 - s);
+      dbx += xi * s;
+    }
+    sums[0] = daa;
+    sums[1] = dab;
+    sums[2] = dbb;
+    sums[3] = dax;
+    sums[4] = dbx;
+  }
+
+  @Override
+  public int osqAssign(float[] vector, float lower, float upper, float step, byte[] dest) {
+    return scalarOsqAssign(vector, 0, lower, upper, step, dest);
+  }
+
+  // OptimizedScalarQuantizer's assignment loop, starting at component from
+  static int scalarOsqAssign(
+      float[] vector, int from, float lower, float upper, float step, byte[] dest) {
+    int sum = 0;
+    for (int h = from; h < vector.length; h++) {
+      float xi = (float) clamp(vector[h], lower, upper);
+      int assignment = Math.round((xi - lower) / step);
+      sum += assignment;
+      dest[h] = (byte) assignment;
+    }
+    return sum;
+  }
+
+  private static double clamp(double x, double a, double b) {
+    return Math.min(Math.max(x, a), b);
+  }
 }

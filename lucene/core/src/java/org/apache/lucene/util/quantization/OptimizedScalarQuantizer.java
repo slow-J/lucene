@@ -157,14 +157,8 @@ public class OptimizedScalarQuantizer {
       float a = intervalScratch[0];
       float b = intervalScratch[1];
       float step = (b - a) / nSteps;
-      int sumQuery = 0;
       // Now we have the optimized intervals, quantize the vector
-      for (int h = 0; h < vector.length; h++) {
-        float xi = (float) clamp(vector[h], a, b);
-        int assignment = Math.round((xi - a) / step);
-        sumQuery += assignment;
-        destinations[i][h] = (byte) assignment;
-      }
+      int sumQuery = VectorUtil.osqAssign(vector, a, b, step, destinations[i]);
       results[i] =
           new QuantizationResult(
               intervalScratch[0],
@@ -222,13 +216,7 @@ public class OptimizedScalarQuantizer {
     float a = intervalScratch[0];
     float b = intervalScratch[1];
     float step = (b - a) / nSteps;
-    int sumQuery = 0;
-    for (int h = 0; h < vector.length; h++) {
-      float xi = (float) clamp(vector[h], a, b);
-      int assignment = Math.round((xi - a) / step);
-      sumQuery += assignment;
-      destination[h] = (byte) assignment;
-    }
+    int sumQuery = VectorUtil.osqAssign(vector, a, b, step, destination);
     return new QuantizationResult(
         intervalScratch[0],
         intervalScratch[1],
@@ -304,22 +292,13 @@ public class OptimizedScalarQuantizer {
    * @param interval interval to quantize the vector
    * @param points number of quantization points
    * @param norm2 squared norm of the vector
+   * @param sums scratch for the two loss sums
    * @return the loss
    */
-  private double loss(float[] vector, float[] interval, int points, float norm2) {
-    double a = interval[0];
-    double b = interval[1];
-    double step = ((b - a) / (points - 1.0F));
-    double stepInv = 1.0 / step;
-    double xe = 0.0;
-    double e = 0.0;
-    for (double xi : vector) {
-      // this is quantizing and then dequantizing the vector
-      double xiq = (a + step * Math.round((clamp(xi, a, b) - a) * stepInv));
-      // how much does the de-quantized value differ from the original value
-      xe += xi * (xi - xiq);
-      e += (xi - xiq) * (xi - xiq);
-    }
+  private double loss(float[] vector, float[] interval, int points, float norm2, double[] sums) {
+    VectorUtil.osqLossSums(vector, interval[0], interval[1], points, sums);
+    double xe = sums[0];
+    double e = sums[1];
     return (1.0 - lambda) * xe * xe / norm2 + lambda * e;
   }
 
@@ -334,30 +313,20 @@ public class OptimizedScalarQuantizer {
    * @param points number of quantization points
    */
   private void optimizeIntervals(float[] initInterval, float[] vector, float norm2, int points) {
-    double initialLoss = loss(vector, initInterval, points, norm2);
+    double[] sums = new double[5];
+    double initialLoss = loss(vector, initInterval, points, norm2, sums);
     final float scale = (1.0f - lambda) / norm2;
     if (Float.isFinite(scale) == false) {
       return;
     }
     for (int i = 0; i < iters; ++i) {
-      float a = initInterval[0];
-      float b = initInterval[1];
-      float stepInv = (points - 1.0f) / (b - a);
       // calculate the grid points for coordinate descent
-      double daa = 0;
-      double dab = 0;
-      double dbb = 0;
-      double dax = 0;
-      double dbx = 0;
-      for (float xi : vector) {
-        float k = Math.round((clamp(xi, a, b) - a) * stepInv);
-        float s = k / (points - 1);
-        daa += (1.0 - s) * (1.0 - s);
-        dab += (1.0 - s) * s;
-        dbb += s * s;
-        dax += xi * (1.0 - s);
-        dbx += xi * s;
-      }
+      VectorUtil.osqDescentSums(vector, initInterval[0], initInterval[1], points, sums);
+      double daa = sums[0];
+      double dab = sums[1];
+      double dbb = sums[2];
+      double dax = sums[3];
+      double dbx = sums[4];
       double m0 = scale * dax * dax + lambda * daa;
       double m1 = scale * dax * dbx + lambda * dab;
       double m2 = scale * dbx * dbx + lambda * dbb;
@@ -372,7 +341,7 @@ public class OptimizedScalarQuantizer {
       if ((Math.abs(initInterval[0] - aOpt) < 1e-8 && Math.abs(initInterval[1] - bOpt) < 1e-8)) {
         return;
       }
-      double newLoss = loss(vector, new float[] {aOpt, bOpt}, points, norm2);
+      double newLoss = loss(vector, new float[] {aOpt, bOpt}, points, norm2, sums);
       // If the new loss is worse, don't update the interval and exit
       // This optimization, unlike kMeans, does not always converge to better loss
       // So exit if we are getting worse

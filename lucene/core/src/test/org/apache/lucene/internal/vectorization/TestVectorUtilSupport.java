@@ -17,6 +17,7 @@
 package org.apache.lucene.internal.vectorization;
 
 import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
+import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -372,6 +373,134 @@ public class TestVectorUtilSupport extends BaseVectorizationTestCase {
         p ->
             p.recalculateScalarQuantizationOffset(
                 outputs.getFirst(), alpha, min, newScale, newAlpha, newMin, newMax));
+  }
+
+  public void testOsqSums() {
+    for (int points : new int[] {2, 4, 7, 16, 128, 256, 1000}) {
+      float lower = -0.1f + random().nextFloat() * 0.05f;
+      float upper = 0.05f + random().nextFloat() * 0.05f;
+      // the quantizer's two grids: double for the loss, float for the coordinate descent
+      double step = ((double) upper - lower) / (points - 1.0F);
+      float descentStepInv = (points - 1.0f) / (upper - lower);
+      float[] vector = new float[size];
+      for (int i = 0; i < size; ++i) {
+        vector[i] =
+            switch (i % 5) {
+              // exactly half a step above a level of either grid: rounding must match Math.round
+              case 0 -> (float) (lower + (random().nextInt(points - 1) + 0.5) * step);
+              case 1 -> lower + (random().nextInt(points - 1) + 0.5f) / descentStepInv;
+              case 2 -> random().nextBoolean() ? lower - random().nextFloat() : upper + 1f;
+              default -> (float) random().nextGaussian() * 0.05f;
+            };
+      }
+      assertOsqSums(vector, lower, upper, points);
+      float[] nonFinite = vector.clone();
+      nonFinite[random().nextInt(size)] =
+          RandomPicks.randomFrom(
+              random(), new Float[] {Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY});
+      assertOsqSums(nonFinite, lower, upper, points);
+      // degenerate intervals
+      assertOsqSums(vector, lower, lower, points);
+      assertOsqSums(vector, upper, lower, points);
+    }
+  }
+
+  private static void assertOsqSums(float[] vector, float lower, float upper, int points) {
+    double[] expected = new double[2];
+    double[] actual = new double[2];
+    LUCENE_PROVIDER.getVectorUtilSupport().osqLossSums(vector, lower, upper, points, expected);
+    PANAMA_OR_NATIVE_PROVIDER
+        .getVectorUtilSupport()
+        .osqLossSums(vector, lower, upper, points, actual);
+    assertBitIdentical("loss points=" + points, expected, actual);
+    expected = new double[5];
+    actual = new double[5];
+    LUCENE_PROVIDER.getVectorUtilSupport().osqDescentSums(vector, lower, upper, points, expected);
+    PANAMA_OR_NATIVE_PROVIDER
+        .getVectorUtilSupport()
+        .osqDescentSums(vector, lower, upper, points, actual);
+    assertBitIdentical("descent points=" + points, expected, actual);
+  }
+
+  private static void assertBitIdentical(String message, double[] expected, double[] actual) {
+    for (int i = 0; i < expected.length; i++) {
+      assertEquals(
+          message + " sums[" + i + "]",
+          Double.doubleToLongBits(expected[i]),
+          Double.doubleToLongBits(actual[i]));
+    }
+  }
+
+  /**
+   * On the interval [0, points - 1] every grid has step 1, so components at m + 0.5 are exact
+   * rounding ties on all three grids, for even and odd m.
+   */
+  public void testOsqRoundingTies() {
+    for (int points : new int[] {2, 3, 4, 16, 256}) {
+      float upper = points - 1;
+      float[] vector = new float[size];
+      for (int i = 0; i < size; ++i) {
+        float tie = (i / 6 % (points - 1)) + 0.5f;
+        vector[i] =
+            switch (i % 6) {
+              case 0 -> tie;
+              case 1 -> Math.nextDown(tie);
+              case 2 -> Math.nextUp(tie);
+              case 3 -> 0.49999997f;
+              case 4 -> -0.0f;
+              default -> tie - 0.5f;
+            };
+      }
+      for (float lower : new float[] {0f, -0.0f}) {
+        assertOsqSums(vector, lower, upper, points);
+        assertOsqAssign(vector, lower, upper, (upper - lower) / (points - 1));
+      }
+    }
+  }
+
+  public void testOsqAssign() {
+    for (int points : new int[] {2, 4, 16, 128, 256}) {
+      float lower = -0.1f + random().nextFloat() * 0.05f;
+      float upper = 0.05f + random().nextFloat() * 0.05f;
+      float step = (upper - lower) / (points - 1);
+      float[] vector = new float[size];
+      for (int i = 0; i < size; ++i) {
+        vector[i] =
+            switch (i % 4) {
+              // exactly half a step above a level, and just below that: where rounding must match
+              case 0 -> lower + (random().nextInt(points - 1) + 0.5f) * step;
+              case 1 -> Math.nextDown(lower + (random().nextInt(points - 1) + 0.5f) * step);
+              default -> (float) random().nextGaussian() * 0.05f;
+            };
+      }
+      assertOsqAssign(vector, lower, upper, step);
+      float[] nonFinite = vector.clone();
+      nonFinite[random().nextInt(size)] =
+          RandomPicks.randomFrom(
+              random(), new Float[] {Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY});
+      assertOsqAssign(nonFinite, lower, upper, step);
+      // degenerate intervals and steps
+      assertOsqAssign(vector, lower, lower, 0f);
+      assertOsqAssign(vector, upper, lower, -step);
+      assertOsqAssign(vector, lower, upper, Float.MIN_VALUE);
+      assertOsqAssign(vector, lower, upper, Float.MIN_NORMAL);
+      // levels far beyond a byte, up to the limit of an int
+      assertOsqAssign(vector, lower, upper, (upper - lower) / 0x1p30f);
+      assertOsqAssign(vector, lower, upper, (upper - lower) / 0x1p31f);
+    }
+  }
+
+  private void assertOsqAssign(float[] vector, float lower, float upper, float step) {
+    byte[] expected = new byte[size];
+    byte[] actual = new byte[size];
+    int expectedSum =
+        LUCENE_PROVIDER.getVectorUtilSupport().osqAssign(vector, lower, upper, step, expected);
+    int actualSum =
+        PANAMA_OR_NATIVE_PROVIDER
+            .getVectorUtilSupport()
+            .osqAssign(vector, lower, upper, step, actual);
+    assertArrayEquals(expected, actual);
+    assertEquals(expectedSum, actualSum);
   }
 
   private void assertFloatReturningProviders(ToDoubleFunction<VectorUtilSupport> func) {
